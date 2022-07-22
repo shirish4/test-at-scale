@@ -6,6 +6,7 @@ blocklist:
   - "/home/nucleus/repo/pkg/runner/docker/docker_test.go##TestDockerWaitCompletion"
   - "/home/nucleus/repo/pkg/runner/docker/docker_test.go##TestDockerRun"
   - "/home/nucleus/repo/pkg/runner/docker/docker_test.go##TestDockerPullNever"
+  - "/home/nucleus/repo/pkg/gitmanager/setup_test.go##TestClone"
   
 preRun:
   # SECONDLY - You need to set the preRun commands. These are shell commands executed inside the root level of your git repository before running the tests. preRun commands are executed using non-login shells by default, so you must explicitly source any dotfiles as part of the command.
