@@ -11,7 +11,6 @@ blocklist:
   - "/home/nucleus/repo/pkg/runner/docker/docker_test.go##TestDockerDestroyWithoutRunning"
   - "/home/nucleus/repo/pkg/runner/docker/docker_test.go##TestDockerDestroyWithRunningWithAutoRemove"
   - "/home/nucleus/repo/pkg/runner/docker/docker_test.go##TestDockerCreate"
-  - "/home/nucleus/repo/pkg/runner/docker/docker_test.go##TestDockerVolumes"
   - "/home/nucleus/repo/pkg/secrets/setup_test.go##TestMain"
   - "/home/nucleus/repo/pkg/runner/docker/setup_test.go##TestMain"
   
