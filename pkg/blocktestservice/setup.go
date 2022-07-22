@@ -4,10 +4,8 @@ package blocktestservice
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 
@@ -67,15 +65,10 @@ func NewTestBlockTestService(cfg *config.NucleusConfig, requests core.Requests, 
 
 func (tbs *TestBlockTestService) fetchBlockListFromNeuron(ctx context.Context, branch string) error {
 	var inp []blocktestAPIResponse
-	params := utils.FetchQueryParams()
-	params["branch"] = branch
-	params["taskID"] = tbs.cfg.TaskID
+	query, headers := utils.GetDefaultQueryAndHeaders()
+	query["branch"] = branch
 
-	headers := map[string]string{
-		"Authorization": fmt.Sprintf("%s %s", "Bearer", os.Getenv("TOKEN")),
-	}
-
-	rawBytes, statusCode, err := tbs.requests.MakeAPIRequest(ctx, http.MethodGet, tbs.endpoint, nil, params, headers)
+	rawBytes, statusCode, err := tbs.requests.MakeAPIRequest(ctx, http.MethodGet, tbs.endpoint, nil, query, headers)
 	if statusCode == http.StatusNotFound {
 		return nil
 	}
@@ -101,10 +94,11 @@ func (tbs *TestBlockTestService) fetchBlockListFromNeuron(ctx context.Context, b
 }
 
 // GetBlockTests provides list of blocked test cases
-func (tbs *TestBlockTestService) GetBlockTests(ctx context.Context, tasConfig *core.TASConfig, branch string) error {
+func (tbs *TestBlockTestService) GetBlockTests(ctx context.Context, blocklistYAML []string, branch string) error {
 	tbs.once.Do(func() {
-		blocktestLocators := make([]*blocktestLocator, 0, len(tasConfig.Blocklist))
-		for _, locator := range tasConfig.Blocklist {
+
+		blocktestLocators := make([]*blocktestLocator, 0, len(blocklistYAML))
+		for _, locator := range blocklistYAML {
 			blockLocator := new(blocktestLocator)
 			blockLocator.Locator = locator
 			blockLocator.Status = string(core.Blocklisted)
@@ -157,7 +151,8 @@ func (tbs *TestBlockTestService) populateBlockList(blocktestSource string, block
 		if val, ok := tbs.blockTestEntities[test.Locator[:i]]; ok {
 			tbs.blockTestEntities[test.Locator[:i]] = append(val, entity)
 		} else {
-			tbs.blockTestEntities[test.Locator[:i]] = append([]blocktest{}, entity)
+			tbs.blockTestEntities[test.Locator[:i]] = append([]blocktest{},
+				blocktest{Source: blocktestSource, Locator: test.Locator, Status: test.Status})
 		}
 	}
 }

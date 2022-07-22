@@ -17,12 +17,14 @@ import (
 )
 
 const (
-	yarnLock                    = "yarn.lock"
-	packageLock                 = "package-lock.json"
-	npmShrinkwrap               = "npm-shrinkwrap.json"
-	nodeModules                 = "node_modules"
-	defaultCompressedFileName   = "cache.tzst"
-	workspaceCompressedFilename = "workspace.tzst"
+	pnpmLock                      = "pnpm-lock.yaml"
+	yarnLock                      = "yarn.lock"
+	packageLock                   = "package-lock.json"
+	npmShrinkwrap                 = "npm-shrinkwrap.json"
+	nodeModules                   = "node_modules"
+	defaultCompressedFileName     = "cache.tzst"
+	workspaceCompressedFilenameV1 = "workspace.tzst"
+	workspaceCompressedFilenameV2 = "workspace-%s.tzst"
 )
 
 // cache represents the files/dirs that will be cached
@@ -52,16 +54,16 @@ func New(z core.ZstdCompressor, azureClient core.AzureClient, logger lumber.Logg
 	}, nil
 }
 
-func (c *cache) getCacheSASURL(ctx context.Context, containerPath string) (string, error) {
+func (c *cache) getCacheSASURL(ctx context.Context, cacheKey string) (string, error) {
 	c.once.Do(func() {
-		cacheBlobURL, apiErr = c.azureClient.GetSASURL(ctx, containerPath, core.CacheContainer)
+		query := map[string]interface{}{"key": cacheKey}
+		cacheBlobURL, apiErr = c.azureClient.GetSASURL(ctx, core.PurposeCache, query)
 	})
 	return cacheBlobURL, apiErr
 }
 
 func (c *cache) Download(ctx context.Context, cacheKey string) error {
-	containerPath := fmt.Sprintf("%s/%s", cacheKey, defaultCompressedFileName)
-	sasURL, err := c.getCacheSASURL(ctx, containerPath)
+	sasURL, err := c.getCacheSASURL(ctx, cacheKey)
 	if err != nil {
 		c.logger.Errorf("Error while generating SAS Token, error %v", err)
 		return err
@@ -137,8 +139,7 @@ func (c *cache) Upload(ctx context.Context, cacheKey string, itemsToCompress ...
 	}
 
 	defer f.Close()
-	containerPath := fmt.Sprintf("%s/%s", cacheKey, defaultCompressedFileName)
-	sasURL, err := c.getCacheSASURL(ctx, containerPath)
+	sasURL, err := c.getCacheSASURL(ctx, cacheKey)
 	if err != nil {
 		c.logger.Errorf("Error while generating SAS Token, error %v", err)
 		return err
@@ -151,8 +152,12 @@ func (c *cache) Upload(ctx context.Context, cacheKey string, itemsToCompress ...
 	return nil
 }
 
-func (c *cache) CacheWorkspace(ctx context.Context) error {
+func (c *cache) CacheWorkspace(ctx context.Context, subModule string) error {
 	tmpDir := os.TempDir()
+	workspaceCompressedFilename := workspaceCompressedFilenameV1
+	if subModule != "" {
+		workspaceCompressedFilename = fmt.Sprintf(workspaceCompressedFilenameV2, subModule)
+	}
 	if err := c.zstd.Compress(ctx, workspaceCompressedFilename, true, tmpDir, global.HomeDir); err != nil {
 		return err
 	}
@@ -164,8 +169,12 @@ func (c *cache) CacheWorkspace(ctx context.Context) error {
 	return nil
 }
 
-func (c *cache) ExtractWorkspace(ctx context.Context) error {
+func (c *cache) ExtractWorkspace(ctx context.Context, subModule string) error {
 	tmpDir := os.TempDir()
+	workspaceCompressedFilename := workspaceCompressedFilenameV1
+	if subModule != "" {
+		workspaceCompressedFilename = fmt.Sprintf(workspaceCompressedFilenameV2, subModule)
+	}
 	src := filepath.Join(global.WorkspaceCacheDir, workspaceCompressedFilename)
 	dst := filepath.Join(tmpDir, workspaceCompressedFilename)
 	if err := fileutils.CopyFile(src, dst, false); err != nil {
@@ -199,6 +208,11 @@ func (c *cache) getDefaultDirs() ([]string, error) {
 		// if package-lock.json or npm-shrinkwrap.json cache .npm cache
 		if d.Name() == packageLock || d.Name() == npmShrinkwrap {
 			defaultDirs = append(defaultDirs, filepath.Join(c.homeDir, ".npm"))
+			return defaultDirs, nil
+		}
+		// if pnmpm-lock.yaml is present, cache .pnpm-store cache
+		if d.Name() == pnpmLock {
+			defaultDirs = append(defaultDirs, filepath.Join(c.homeDir, ".local", "share", "pnpm", "store"))
 			return defaultDirs, nil
 		}
 	}

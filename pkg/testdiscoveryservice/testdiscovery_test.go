@@ -6,26 +6,23 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/LambdaTest/test-at-scale/mocks"
 	"github.com/LambdaTest/test-at-scale/pkg/core"
 	"github.com/LambdaTest/test-at-scale/pkg/global"
 	"github.com/LambdaTest/test-at-scale/pkg/requestutils"
 	"github.com/LambdaTest/test-at-scale/testutils"
-	"github.com/LambdaTest/test-at-scale/testutils/mocks"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/stretchr/testify/mock"
 )
 
-type args struct {
-	ctx        context.Context
-	tasConfig  *core.TASConfig
-	payload    *core.Payload
-	secretData map[string]string
-	diff       map[string]int
-	diffExists bool
+type argsV1 struct {
+	ctx           context.Context
+	discoveryArgs core.DiscoveyArgs
 }
-type test struct {
+
+type testV1 struct {
 	name           string
-	args           args
+	args           argsV1
 	wantErr        bool
 	wantEnvMap     map[string]string
 	wantSecretData map[string]string
@@ -61,7 +58,7 @@ func Test_testDiscoveryService_Discover(t *testing.T) {
 	tests := getTestCases()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tds.Discover(tt.args.ctx, tt.args.tasConfig, tt.args.payload, tt.args.secretData, tt.args.diff, tt.args.diffExists)
+			_, err := tds.Discover(tt.args.ctx, &tt.args.discoveryArgs)
 			if !reflect.DeepEqual(PassedEnvMap, tt.wantEnvMap) || !reflect.DeepEqual(PassedSecretDataMap, tt.wantSecretData) {
 				t.Errorf("expected Envmap: %+v, received: %+v\nexpected SecretDataMap: %+v, received: %+v\n",
 					tt.wantEnvMap, PassedEnvMap, tt.wantSecretData, PassedSecretDataMap)
@@ -73,77 +70,67 @@ func Test_testDiscoveryService_Discover(t *testing.T) {
 	}
 }
 
-func getTestCases() []*test {
-	testCases := []*test{
+func getTestCases() []*testV1 {
+	testCases := []*testV1{
 		{"Test Discover with Premerge pattern",
-			args{
+
+			argsV1{
 				ctx: context.TODO(),
-				tasConfig: &core.TASConfig{
-					Postmerge: &core.Merge{
-						Patterns: []string{"./test/**/*.spec.ts"},
-						EnvMap:   map[string]string{"env": "RepoName"},
+				discoveryArgs: core.DiscoveyArgs{
+					TestPattern: []string{"./test/**/*.spec.ts"},
+					Payload: &core.Payload{
+						EventType:   core.EventPullRequest,
+						TasFileName: "../../tesutils/testdata/tas.yaml",
 					},
-					Premerge: &core.Merge{
-						Patterns: []string{"./test/**/*.spec.ts"},
-						EnvMap:   map[string]string{"env": "repo"},
-					},
+					EnvMap:         map[string]string{"env": "repo"},
+					SecretData:     map[string]string{"secret": "data"},
+					TestConfigFile: "",
+					FrameWork:      "jest",
+					SmartRun:       false,
+					Diff:           map[string]int{},
+					DiffExists:     true,
 				},
-				payload: &core.Payload{
-					EventType:   "pull-request",
-					TasFileName: "../../tesutils/testdata/tas.yaml",
-				},
-				secretData: map[string]string{"secret": "data"},
-				diff:       map[string]int{},
 			},
 			true,
 			map[string]string{"env": "repo"},
 			map[string]string{"secret": "data"},
 		},
 		{"Test Discover with Postmerge pattern",
-			args{
+			argsV1{
 				ctx: context.TODO(),
-				tasConfig: &core.TASConfig{
-					Postmerge: &core.Merge{
-						Patterns: []string{"./test/**/*.spec.ts"},
-						EnvMap:   map[string]string{"env": "RepoName"},
+				discoveryArgs: core.DiscoveyArgs{
+					TestPattern: []string{"./test/**/*.spec.ts"},
+					EnvMap:      map[string]string{"env": "RepoName"},
+					Payload: &core.Payload{
+						EventType:   "push",
+						TasFileName: "../../tesutils/testdata/tas.yaml",
 					},
-					Premerge: &core.Merge{
-						Patterns: []string{"./test/**/*.spec.ts"},
-						EnvMap:   map[string]string{"env": "repo"},
-					},
+					SecretData:     map[string]string{"this is": "a secret"},
+					FrameWork:      "mocha",
+					TestConfigFile: "",
+					SmartRun:       false,
+					Diff:           map[string]int{},
+					DiffExists:     false,
 				},
-				payload: &core.Payload{
-					EventType:   "push",
-					TasFileName: "../../tesutils/testdata/tas.yaml",
-				},
-				secretData: map[string]string{"this is": "a secret"},
-				diff:       map[string]int{"../../tesutils/testdata/tas.yaml": 2},
 			},
 			true,
 			map[string]string{"env": "RepoName"},
 			map[string]string{"this is": "a secret"},
 		},
 		{"Test Discover not to execute discoverAll",
-			args{
+			argsV1{
 				ctx: context.TODO(),
-				tasConfig: &core.TASConfig{
-					Postmerge: &core.Merge{
-						Patterns: []string{"./test/**/*.spec.ts"},
-						EnvMap:   map[string]string{"env": "RepoName"},
+				discoveryArgs: core.DiscoveyArgs{
+					TestPattern: []string{"./test/**/*.spec.ts"},
+					EnvMap:      map[string]string{"env": "RepoName"},
+					Payload: &core.Payload{
+						EventType:                  "push",
+						TasFileName:                "../../tesutils/testdata/tas.yaml",
+						ParentCommitCoverageExists: true,
 					},
-					Premerge: &core.Merge{
-						Patterns: []string{"./test/**/*.spec.ts"},
-						EnvMap:   map[string]string{"env": "repo"},
-					},
-					SmartRun: true,
+					SecretData: map[string]string{"secret": "data"},
+					FrameWork:  "jasmine",
 				},
-				payload: &core.Payload{
-					EventType:                  "push",
-					TasFileName:                "../../tesutils/testdata/tas.yaml",
-					ParentCommitCoverageExists: true,
-				},
-				secretData: map[string]string{"secret": "data"},
-				diff:       map[string]int{"../../tesutils/testdata/dne.yaml": 4},
 			},
 			true,
 			map[string]string{"env": "RepoName"},

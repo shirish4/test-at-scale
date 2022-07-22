@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 
 	"github.com/LambdaTest/test-at-scale/config"
@@ -24,6 +24,7 @@ var (
 	defaultBufferSize     = 3 * 1024 * 1024
 	defaultMaxBuffers     = 4
 	coverageContainerName = "coverage"
+	maxRetry              = 10
 )
 
 // store represents the azure storage
@@ -36,8 +37,7 @@ type store struct {
 
 // request body for getting SAS URL API.
 type request struct {
-	BlobPath string             `json:"blob_path"`
-	BlobType core.ContainerType `json:"blob_type"`
+	Purpose core.SASURLPurpose `json:"purpose" validate:"oneof=cache workspace_cache pre_run_logs post_run_logs execution_logs"`
 }
 
 //  response body for  get SAS URL API.
@@ -72,8 +72,7 @@ func NewAzureBlobEnv(cfg *config.NucleusConfig, requests core.Requests, logger l
 	if err != nil {
 		return nil, err
 	}
-
-	serviceClient, err := azblob.NewServiceClientWithSharedKey(u.String(), credential, nil)
+	serviceClient, err := azblob.NewServiceClientWithSharedKey(u.String(), credential, getClientOptions())
 	if err != nil {
 		logger.Errorf("Failed to create azure service client, error: %v", err)
 		return nil, err
@@ -113,7 +112,7 @@ func (s *store) CreateUsingSASURL(ctx context.Context, sasURL string, reader io.
 	if err != nil {
 		return "", err
 	}
-	blobClient, err := azblob.NewBlockBlobClientWithNoCredential(u.String(), &azblob.ClientOptions{})
+	blobClient, err := azblob.NewBlockBlobClientWithNoCredential(u.String(), getClientOptions())
 	if err != nil {
 		s.logger.Errorf("failed to create blob client, error: %v", err)
 		return "", err
@@ -154,21 +153,21 @@ func (s *store) Create(ctx context.Context, path string, reader io.Reader, mimeT
 }
 
 // GetSASURL calls request neuron to get the SAS url
-func (s *store) GetSASURL(ctx context.Context, containerPath string, containerType core.ContainerType) (string, error) {
-	reqPayload := &request{
-		BlobPath: containerPath,
-		BlobType: containerType,
-	}
+func (s *store) GetSASURL(ctx context.Context, purpose core.SASURLPurpose, query map[string]interface{}) (string, error) {
+	reqPayload := &request{Purpose: purpose}
 	reqBody, err := json.Marshal(reqPayload)
 	if err != nil {
 		s.logger.Errorf("failed to marshal request body %v", err)
 		return "", err
 	}
-	params := utils.FetchQueryParams()
-	headers := map[string]string{
-		"Authorization": fmt.Sprintf("%s %s", "Bearer", os.Getenv("TOKEN")),
+	defaultQuery, headers := utils.GetDefaultQueryAndHeaders()
+	for key, val := range defaultQuery {
+		if query == nil {
+			query = make(map[string]interface{})
+		}
+		query[key] = val
 	}
-	rawBytes, _, err := s.requests.MakeAPIRequest(ctx, http.MethodPost, s.endpoint, reqBody, params, headers)
+	rawBytes, _, err := s.requests.MakeAPIRequest(ctx, http.MethodPost, s.endpoint, reqBody, query, headers)
 	if err != nil {
 		return "", err
 	}
@@ -204,4 +203,13 @@ func handleError(err error) error {
 		}
 	}
 	return err
+}
+
+func getClientOptions() *azblob.ClientOptions {
+	return &azblob.ClientOptions{
+		Retry: policy.RetryOptions{
+			MaxRetries: int32(maxRetry),
+			TryTimeout: global.DefaultAPITimeout,
+		},
+	}
 }

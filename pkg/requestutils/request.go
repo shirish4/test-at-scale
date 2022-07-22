@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"time"
 
 	"github.com/LambdaTest/test-at-scale/pkg/core"
@@ -32,7 +34,8 @@ func (r *requests) MakeAPIRequest(
 	ctx context.Context,
 	httpMethod, endpoint string,
 	body []byte,
-	params, headers map[string]string,
+	query map[string]interface{},
+	headers map[string]string,
 ) (respBody []byte, statusCode int, err error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
@@ -40,8 +43,18 @@ func (r *requests) MakeAPIRequest(
 		return nil, 0, err
 	}
 	q := u.Query()
-	for id, val := range params {
-		q.Set(id, val)
+	for id, val := range query {
+		v := reflect.ValueOf(val)
+		// nolint:exhaustive
+		switch v.Kind() {
+		case reflect.Array:
+		case reflect.Slice:
+			for i := 0; i < v.Len(); i += 1 {
+				q.Add(id, v.Index(i).String())
+			}
+		default:
+			q.Set(id, fmt.Sprintf("%v", val))
+		}
 	}
 	u.RawQuery = q.Encode()
 	req, err := http.NewRequestWithContext(ctx, httpMethod, u.String(), bytes.NewBuffer(body))
@@ -61,6 +74,9 @@ func (r *requests) MakeAPIRequest(
 		}
 		defer resp.Body.Close()
 		statusCode = resp.StatusCode
+		if 500 <= statusCode && statusCode < 600 {
+			return fmt.Errorf("status code %d received", statusCode)
+		}
 		respBody, err = io.ReadAll(resp.Body)
 		if err != nil {
 			r.logger.Errorf("error while reading http response body %v", err)

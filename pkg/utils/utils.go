@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/LambdaTest/test-at-scale/pkg/core"
@@ -118,37 +119,16 @@ func GetConfigFileName(path string) (string, error) {
 	return path, nil
 }
 
-func ValidateStruct(ctx context.Context, ymlContent []byte, ymlFilename string) (*core.TASConfig, error) {
-	enObj := en.New()
-	uni := ut.New(enObj, enObj)
-	trans, _ := uni.GetTranslator("en")
-	validate := validator.New()
-	if err := en_translations.RegisterDefaultTranslations(validate, trans); err != nil {
+func ValidateStructTASYmlV1(ctx context.Context, ymlContent []byte, ymlFilename string) (*core.TASConfig, error) {
+	validate, err := getValidator()
+	if err != nil {
 		return nil, err
 	}
-	configureValidator(validate, trans)
-
-	tasConfig := &core.TASConfig{SmartRun: true, Tier: core.Small, SplitMode: core.TestSplit}
+	tasConfig := &core.TASConfig{SmartRun: true, Tier: core.Small, SplitMode: core.TestSplit, Version: global.DefaultTASVersion}
 	if err := yaml.Unmarshal(ymlContent, tasConfig); err != nil {
 		return nil, fmt.Errorf("`%s` configuration file contains invalid format. Please correct the `%s` file", ymlFilename, ymlFilename)
 	}
-
-	validateErr := validate.Struct(tasConfig)
-	if validateErr != nil {
-		// translate all error at once
-		validationErrs := validateErr.(validator.ValidationErrors)
-		err := new(errs.ErrInvalidConf)
-		err.Message = errs.New(
-			fmt.Sprintf(
-				"Invalid values provided for the following fields in the `%s` configuration file: \n",
-				ymlFilename),
-		).Error()
-		for _, e := range validationErrs {
-			// can translate each error one at a time.
-			err.Fields = append(err.Fields, e.Field())
-			err.Values = append(err.Values, e.Value())
-		}
-
+	if err := validateStruct(validate, tasConfig, ymlFilename); err != nil {
 		return nil, err
 	}
 	return tasConfig, nil
@@ -175,12 +155,117 @@ func configureValidator(validate *validator.Validate, trans ut.Translator) {
 	})
 }
 
-// FetchQueryParams returns the params which are required in API
-func FetchQueryParams() (params map[string]string) {
-	params = map[string]string{
+// GetVersion returns version of tas yml file
+func GetVersion(ymlContent []byte) (int, error) {
+	tasVersion := &core.TasVersion{Version: global.DefaultTASVersion}
+	if err := yaml.Unmarshal(ymlContent, tasVersion); err != nil {
+		return 0, fmt.Errorf("error in unmarshling tas yml file")
+	}
+	majorVersion := strings.Split(tasVersion.Version, ".")[0]
+
+	return strconv.Atoi(majorVersion)
+}
+
+// ValidateStructTASYmlV2 validates tas configuration file
+func ValidateStructTASYmlV2(ctx context.Context, ymlContent []byte, ymlFileName string) (*core.TASConfigV2, error) {
+	tasConfig := &core.TASConfigV2{SmartRun: true, Tier: core.Small, SplitMode: core.TestSplit}
+	if err := yaml.Unmarshal(ymlContent, tasConfig); err != nil {
+		return nil, fmt.Errorf("`%s` configuration file contains invalid format. Please correct the `%s` file", ymlFileName, ymlFileName)
+	}
+	validate, err := getValidator()
+	if err != nil {
+		return nil, err
+	}
+	if err := validateStruct(validate, tasConfig, ymlFileName); err != nil {
+		return nil, err
+	}
+
+	return tasConfig, nil
+}
+
+func getValidator() (*validator.Validate, error) {
+	enObj := en.New()
+	uni := ut.New(enObj, enObj)
+	trans, _ := uni.GetTranslator("en")
+	validate := validator.New()
+	if err := en_translations.RegisterDefaultTranslations(validate, trans); err != nil {
+		return nil, err
+	}
+	configureValidator(validate, trans)
+	return validate, nil
+}
+
+func validateStruct(validate *validator.Validate, config interface{}, ymlFilename string) error {
+	validateErr := validate.Struct(config)
+	if validateErr != nil {
+		// translate all error at once
+		validationErrs := validateErr.(validator.ValidationErrors)
+		err := new(errs.ErrInvalidConf)
+		err.Message = errs.New(
+			fmt.Sprintf(
+				"Invalid values provided for the following fields in the `%s` configuration file: \n",
+				ymlFilename),
+		).Error()
+		for _, e := range validationErrs {
+			// can translate each error one at a time.
+			err.Fields = append(err.Fields, e.Field())
+			err.Values = append(err.Values, e.Value())
+		}
+		return err
+	}
+	return nil
+}
+
+// ValidateSubModule validates submodule
+func ValidateSubModule(module *core.SubModule) error {
+	if module.Name == "" {
+		return errs.New("module name is not defined")
+	}
+	if module.Path == "" {
+		return errs.New(fmt.Sprintf("module path is not defined for module %s ", module.Name))
+	}
+	if len(module.Patterns) == 0 {
+		return errs.New(fmt.Sprintf("module %s pattern length is 0", module.Name))
+	}
+
+	return nil
+}
+
+// GetDefaultQueryAndHeaders returns the query and headers that should be supplied with each request made to TAS Server
+func GetDefaultQueryAndHeaders() (query map[string]interface{}, headers map[string]string) {
+	query = map[string]interface{}{
 		"repoID":  os.Getenv("REPO_ID"),
 		"buildID": os.Getenv("BUILD_ID"),
 		"orgID":   os.Getenv("ORG_ID"),
+		"taskID":  os.Getenv("TASK_ID"),
 	}
-	return params
+	headers = map[string]string{
+		"Authorization": fmt.Sprintf("Bearer %s", os.Getenv("TOKEN")),
+	}
+	return query, headers
+}
+
+func GetArgs(command string, frameWork string, frameworkVersion int,
+	configFile string,
+	target []string) []string {
+	language := global.FrameworkLanguageMap[frameWork]
+
+	args := []string{}
+	if language == "java" {
+		args = append(args, "-jar", "/test-at-scale-java.jar",
+			global.ArgCommand, command, global.ArgFrameworVersion,
+			strconv.Itoa(frameworkVersion))
+	} else {
+		args = append(args, global.ArgCommand, command)
+	}
+
+	if configFile != "" {
+		args = append(args, global.ArgConfig, configFile)
+	}
+
+	for _, pattern := range target {
+		args = append(args, global.ArgPattern, pattern)
+	}
+
+	return args
 }
